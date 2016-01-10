@@ -25,9 +25,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import source.SourceException;
-import source.tuner.frequency.FrequencyChangeListener;
 import source.tuner.frequency.FrequencyController;
 import source.tuner.frequency.FrequencyController.Tunable;
+import source.tuner.frequency.IFrequencyChangeProcessor;
+import source.tuner.frequency.IFrequencyChangeListener;
 import controller.ThreadPoolManager;
 
 public abstract class TunerController implements Tunable
@@ -36,8 +37,7 @@ public abstract class TunerController implements Tunable
 			LoggerFactory.getLogger( TunerController.class );
 
 	/* List of currently tuned channels being served to demod channels */
-	protected ArrayList<TunerChannel> mTunedChannels = 
-					new ArrayList<TunerChannel>();
+	protected ArrayList<TunerChannel> mTunedChannels = new ArrayList<>();
 	protected FrequencyController mFrequencyController;
 	private int mMiddleUnusable;
 	private double mUsableBandwidthPercentage;
@@ -371,16 +371,16 @@ public abstract class TunerController implements Tunable
 	 * Note: this is normally used by the Tuner.  Any additional listeners can
 	 * be registered on the tuner.
 	 */
-    public void addListener( FrequencyChangeListener listener )
+    public void addListener( IFrequencyChangeProcessor processor )
     {
-    	mFrequencyController.addListener( listener );
+    	mFrequencyController.addListener( processor );
     }
 
     /**
      * Removes the frequency change listener
      */
-    public void removeListener( FrequencyChangeListener listener )
+    public void removeListener( IFrequencyChangeProcessor processor )
     {
-    	mFrequencyController.removeListener( listener );
+    	mFrequencyController.removeFrequencyChangeProcessor( processor );
     }
 }
