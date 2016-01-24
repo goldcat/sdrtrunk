@@ -37,6 +37,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import properties.SystemProperties;
+import alias.Alias;
+import alias.AliasDirectory;
+import alias.AliasList;
+import alias.AliasModel;
+import alias.Group;
 import controller.ThreadPoolManager;
 import controller.channel.Channel;
 import controller.channel.Channel.ChannelType;
@@ -54,6 +59,7 @@ public class PlaylistManager implements ChannelEventListener
 	private Playlist mPlaylist = new Playlist();
 	
 	private ThreadPoolManager mThreadPoolManager;
+	private AliasModel mAliasModel;
 	private ChannelModel mChannelModel;
 	
 	private AtomicBoolean mPlaylistSavePending = new AtomicBoolean();
@@ -69,10 +75,12 @@ public class PlaylistManager implements ChannelEventListener
 	 * @param threadPoolManager
 	 * @param channelModel
 	 */
-	public PlaylistManager( ThreadPoolManager threadPoolManager, 
+	public PlaylistManager( ThreadPoolManager threadPoolManager,
+							AliasModel aliasModel,
 							ChannelModel channelModel )
 	{
 		mThreadPoolManager = threadPoolManager;
+		mAliasModel = aliasModel;
 		mChannelModel = channelModel;
 
 		//Register for channel events so that we can save the playlist when
@@ -94,7 +102,8 @@ public class PlaylistManager implements ChannelEventListener
 //all of the data
 
 		mPlaylistLoading = true;
-		
+
+		mAliasModel.addAliases( mPlaylist.getAliases() );
 		mChannelModel.addChannels( mPlaylist.getChannels() );
 		
 		mPlaylistLoading = false;
@@ -117,8 +126,6 @@ public class PlaylistManager implements ChannelEventListener
 				props.get( "playlist.currentfilename", defaultPlaylistFile );
 		
 		load( playlistFolder.resolve( playlistFile ) );
-		
-		transferPlaylistToModels();
 	}
 
 	/**
@@ -165,7 +172,13 @@ public class PlaylistManager implements ChannelEventListener
 	{
 //TODO: recreate the playlist and load values from each of the models
 		
+		mLog.debug( "Aliases in model:" + mAliasModel.getAliases().size() );
+		mPlaylist.setAliases( mAliasModel.getAliases() );
+		mLog.debug( "Aliases in playlist:" + mPlaylist.getAliases().size() );
+
+		mLog.debug( "Channels in model:" + mChannelModel.getChannels().size() );
 		mPlaylist.setChannels( mChannelModel.getChannels() );
+		mLog.debug( "Channels in playlist:" + mPlaylist.getChannels().size() );
 		
 		JAXBContext context = null;
 		
@@ -368,16 +381,27 @@ public class PlaylistManager implements ChannelEventListener
 							playlistPath.toString() + "]" );
 		}
 		
+		boolean saveRequired = false;
+
 		if( mPlaylist == null )
 		{
 			mPlaylist = new Playlist();
-			save();
+			saveRequired = true;
 		}
 
+		
 		//Check for and convert from legacy play list format
-		if( mPlaylist.hasSystemList() )
+		if( mPlaylist.hasSystemList() || mPlaylist.hasAliasDirectory() )
 		{
 			convertPlaylistFormat();
+			saveRequired = true;
+		}
+		
+		transferPlaylistToModels();
+
+		if( saveRequired )
+		{
+			save();
 		}
 	}
 
@@ -386,35 +410,60 @@ public class PlaylistManager implements ChannelEventListener
 	 */
 	private void convertPlaylistFormat()
 	{
-		mLog.info( "Legacy playlist format detected - converting ..." );
+		mLog.info( "Legacy playlist format detected - converting" );
 
 		createBackupPlaylist();
 		
 		//Playlist version 1 to version 2 format conversion.  In order to keep
 		//backwards compatibility, transfer all of the System-Site-Channel 
 		//objects over to the new channel list format
-		SystemList systemList = mPlaylist.getSystemList();
-		
-		for( controller.system.System system: systemList.getSystem() )
+		if( mPlaylist.hasSystemList() )
 		{
-			for( Site site: system.getSite() )
+			SystemList systemList = mPlaylist.getSystemList();
+			
+			for( controller.system.System system: systemList.getSystem() )
 			{
-				for( Channel channel: site.getChannel() )
+				for( Site site: system.getSite() )
 				{
-					channel.setSystem( system.getName() );
-					channel.setSite( site.getName() );
-					
-					mPlaylist.getChannels().add( channel );
+					for( Channel channel: site.getChannel() )
+					{
+						channel.setSystem( system.getName() );
+						channel.setSite( site.getName() );
+						
+						mPlaylist.getChannels().add( channel );
+					}
 				}
 			}
+
+			mPlaylist.getSystemList().clearSystems();
+			
+			mLog.info( "Converted [" + mPlaylist.getChannels().size() + 
+					"] channels to new playlist format" );
 		}
-		
-		mPlaylist.getSystemList().clearSystems();
-		
-		mLog.info( "Converted [" + mPlaylist.getChannels().size() + 
-				"] channels to new playlist format" );
-		
-		save();
+
+		if( mPlaylist.hasAliasDirectory() )
+		{
+			AliasDirectory aliasDirectory = mPlaylist.getAliasDirectory();
+			
+			for( AliasList list: aliasDirectory.getAliasList() )
+			{
+				for( Group group: list.getGroup() )
+				{
+					for( Alias alias: group.getAlias() )
+					{
+						alias.setList( list.getName() );
+						alias.setGroup( group.getName() );
+						
+						mPlaylist.getAliases().add( alias );
+					}
+				}
+			}
+			
+			mPlaylist.getAliasDirectory().clearAliasLists();
+			
+			mLog.info( "Converted [" + mPlaylist.getAliases().size() + 
+					"] aliases to new playlist format" );
+		}
 	}
 	
 	/**
