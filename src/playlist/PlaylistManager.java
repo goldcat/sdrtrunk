@@ -1,6 +1,6 @@
 /*******************************************************************************
  *     SDR Trunk 
- *     Copyright (C) 2014 Dennis Sheirer
+ *     Copyright (C) 2014-2016 Dennis Sheirer
  * 
  *     This program is free software: you can redistribute it and/or modify
  *     it under the terms of the GNU General Public License as published by
@@ -25,6 +25,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.xml.bind.JAXBContext;
 import javax.xml.bind.JAXBException;
@@ -35,23 +37,47 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import properties.SystemProperties;
+import controller.ThreadPoolManager;
 import controller.channel.Channel;
+import controller.channel.Channel.ChannelType;
+import controller.channel.ChannelEvent;
+import controller.channel.ChannelEventListener;
 import controller.channel.ChannelModel;
 import controller.site.Site;
 import controller.system.SystemList;
 
-public class PlaylistManager
+public class PlaylistManager implements ChannelEventListener
 {
 	private final static Logger mLog = 
 			LoggerFactory.getLogger( PlaylistManager.class );
 
 	private Playlist mPlaylist = new Playlist();
 	
+	private ThreadPoolManager mThreadPoolManager;
 	private ChannelModel mChannelModel;
 	
-	public PlaylistManager( ChannelModel channelModel )
+	private AtomicBoolean mPlaylistSavePending = new AtomicBoolean();
+	private boolean mPlaylistLoading = false;
+	
+	/**
+	 * Playlist manager - manages all channel configurationc, channel maps, and
+	 * alias lists and handles loading or persisting to a playlist.xml file
+	 * 
+	 * Monitors playlist changes to automatically save configuration changes 
+	 * after they occur.
+	 * 
+	 * @param threadPoolManager
+	 * @param channelModel
+	 */
+	public PlaylistManager( ThreadPoolManager threadPoolManager, 
+							ChannelModel channelModel )
 	{
+		mThreadPoolManager = threadPoolManager;
 		mChannelModel = channelModel;
+
+		//Register for channel events so that we can save the playlist when
+		//any channels change
+		mChannelModel.addListener( this );
 	}
 
 	public Playlist getPlayist()
@@ -64,8 +90,11 @@ public class PlaylistManager
 	 */
 	private void transferPlaylistToModels()
 	{
-		//Load channels
+		mPlaylistLoading = true;
+		
 		mChannelModel.addChannels( mPlaylist.getChannels() );
+		
+		mPlaylistLoading = false;
 	}
 
 	/**
@@ -88,7 +117,46 @@ public class PlaylistManager
 		
 		transferPlaylistToModels();
 	}
-	
+
+	/**
+	 * Channel event listener method.  Monitors channel events for events that
+	 * indicate that the playlist has changed and queues automatic playlist
+	 * saving.
+	 */
+	@Override
+	public void channelChanged( ChannelEvent event )
+	{
+		//Only save playlist for changes to standard channels (not traffic)
+		if( event.getChannel().getChannelType() == ChannelType.STANDARD )
+		{
+			switch( event.getEvent() )
+			{
+				case NOTIFICATION_ADD:
+				case NOTIFICATION_CONFIGURATION_CHANGE:
+				case NOTIFICATION_DELETE:
+				case NOTIFICATION_PROCESSING_START:
+				case NOTIFICATION_PROCESSING_STOP:
+					schedulePlaylistSave();
+					break;
+				case NOTIFICATION_ENABLE_REJECTED:
+				case NOTIFICATION_SELECTION_CHANGE:
+				case NOTIFICATION_STATE_RESET:
+				case REQUEST_DELETE:
+				case REQUEST_DESELECT:
+				case REQUEST_DISABLE:
+				case REQUEST_ENABLE:
+				case REQUEST_SELECT:
+					//Do nothing for these event types
+					break;
+				default:
+					//When a new event enum entry is added and received, throw an
+					//exception here to ensure developer adds support for the 
+					//use case
+					throw new IllegalArgumentException( "Unrecognized Channel "
+							+ "Event [" + event.getEvent().name() + "]" );
+			}
+		}
+	}
 
 	public void save()
 	{
@@ -289,13 +357,14 @@ public class PlaylistManager
 		}
 		else
 		{
-			mLog.info( "PlaylistManager - playlist does not exist [" + 
+			mLog.info( "PlaylistManager - playlist not found at [" + 
 							playlistPath.toString() + "]" );
 		}
 		
 		if( mPlaylist == null )
 		{
 			mPlaylist = new Playlist();
+			save();
 		}
 
 		//Check for and convert from legacy play list format
@@ -335,8 +404,40 @@ public class PlaylistManager
 		
 		mPlaylist.getSystemList().clearSystems();
 		
-		mLog.info( "Converted [" + mPlaylist.getChannels().size() + "] channels to new playlist format" );
+		mLog.info( "Converted [" + mPlaylist.getChannels().size() + 
+				"] channels to new playlist format" );
 		
 		save();
+	}
+	
+	/**
+	 * Schedules a playlist save task.  Subsequent calls to this method will be 
+	 * ignored until the save event occurs, thus limiting repetitive playlist 
+	 * saving to a minimum.
+	 */
+	private void schedulePlaylistSave()
+	{
+		if( !mPlaylistLoading )
+		{
+			if( mPlaylistSavePending.compareAndSet( false, true ) )
+			{
+				mThreadPoolManager.scheduleOnce( new PlaylistSaveTask(), 
+						2, TimeUnit.SECONDS );
+			}
+		}
+	}
+
+	/**
+	 * Saves the playlist and resets the playlist save pending flag to false
+	 */
+	public class PlaylistSaveTask implements Runnable
+	{
+		@Override
+		public void run()
+		{
+			save();
+
+			mPlaylistSavePending.set( false );
+		}
 	}
 }
