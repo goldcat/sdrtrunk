@@ -90,6 +90,9 @@ public class PlaylistManager implements ChannelEventListener
 	 */
 	private void transferPlaylistToModels()
 	{
+//TODO: delete the playlist after we've loaded it, since the models will have
+//all of the data
+
 		mPlaylistLoading = true;
 		
 		mChannelModel.addChannels( mPlaylist.getChannels() );
@@ -160,6 +163,10 @@ public class PlaylistManager implements ChannelEventListener
 
 	public void save()
 	{
+//TODO: recreate the playlist and load values from each of the models
+		
+		mPlaylist.setChannels( mChannelModel.getChannels() );
+		
 		JAXBContext context = null;
 		
 		SystemProperties props = SystemProperties.getInstance();
